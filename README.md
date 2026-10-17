@@ -5,7 +5,7 @@ Play any song on any Roblox instrument. Autoplay, humanized performance, guitar 
 ## Run it
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/YOUR_GITHUB_USER/encore-public/main/loader.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/trocktristan-hash/encore-public/main/loader.lua"))()
 ```
 
 A box will ask for your **key**. Get this week's key here: **<your key link>** — then paste it in.
@@ -15,7 +15,7 @@ Already have a key and want to skip the box:
 
 ```lua
 getgenv().EncoreKey = "ENC-XXXXXXXX-XXXXXXXX"
-loadstring(game:HttpGet("https://raw.githubusercontent.com/YOUR_GITHUB_USER/encore-public/main/loader.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/trocktristan-hash/encore-public/main/loader.lua"))()
 ```
 
 ## Songs
