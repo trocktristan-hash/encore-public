@@ -14,7 +14,7 @@
 ]]
 
 ----------------------------------------------------------------------------- CONFIG (fill these in)
-local BACKEND = "https://encore-keys.YOUR-SUBDOMAIN.workers.dev"  -- your deployed Worker URL, no trailing slash
+local BACKEND = "https://encore-keys.affxter.workers.dev"  -- your deployed Worker URL, no trailing slash
 local KEY_LINK = "https://your-key-link.example"                  -- where users get a key (Linkvertise, Pastebin, a Discord channel, ...)
 local BRAND   = "Encore"
 -------------------------------------------------------------------------------------------------
