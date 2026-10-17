@@ -1,0 +1,8 @@
+# This repo is PUBLIC. The real hub (Encore.lua) must never live here.
+Encore.lua
+PianoHub.lua
+*.payload.lua
+
+# junk
+.DS_Store
+Thumbs.db
