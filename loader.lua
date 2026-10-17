@@ -1,21 +1,21 @@
 --[[
 	Encore loader  (public)
 
-	This file is safe to be public. It contains NO hub code - just a key check.
-	It asks the backend for the real script; the backend only hands it over when
-	the key is valid. An invalid/expired key gets a short "go get a key" message.
+	Safe to be public - contains NO hub code, just a key check.
 
-	Users run:
-		loadstring(game:HttpGet("https://raw.githubusercontent.com/<you>/encore/main/loader.lua"))()
+	How a user gets in:
+	  * Click "Get a key"  -> a LootLabs link is copied to the clipboard.
+	    Open it in a browser, finish it, come back - Encore loads itself (the key
+	    is bound to this device). Keys last a while, then you grab a new one.
+	  * Already have a key (e.g. a premium key)? Paste it in the box and hit Use key.
+	  * Power users:  getgenv().EncoreKey = "ENC-...."  before running this.
 
-	Advanced users can skip the popup by setting the key first:
-		getgenv().EncoreKey = "XXXX-XXXX"
-		loadstring(game:HttpGet("https://raw.githubusercontent.com/<you>/encore/main/loader.lua"))()
+	Run:
+	  loadstring(game:HttpGet("https://raw.githubusercontent.com/trocktristan-hash/encore-public/main/loader.lua"))()
 ]]
 
------------------------------------------------------------------------------ CONFIG (fill these in)
-local BACKEND = "https://encore-keys.affxter.workers.dev"  -- your deployed Worker URL, no trailing slash
-local KEY_LINK = "https://your-key-link.example"                  -- where users get a key (Linkvertise, Pastebin, a Discord channel, ...)
+----------------------------------------------------------------------------- CONFIG
+local BACKEND = "https://encore-keys.affxter.workers.dev"  -- your Worker URL, no trailing slash
 local BRAND   = "Encore"
 -------------------------------------------------------------------------------------------------
 
@@ -23,7 +23,7 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local genv = (getgenv and getgenv()) or _G
 
--- data folder (match the hub's: "Encore", or an existing "PianoHub")
+local function isfn(f) return type(f) == "function" end
 local function hasFolder(p)
 	local ok, r = pcall(function() return isfolder and isfolder(p) end)
 	return ok and r == true
@@ -32,7 +32,6 @@ local ROOT = (hasFolder("PianoHub") and not hasFolder("Encore")) and "PianoHub" 
 pcall(function() if makefolder and not hasFolder(ROOT) then makefolder(ROOT) end end)
 local KEY_FILE = ROOT .. "/key.txt"
 
-local function isfn(f) return type(f) == "function" end
 local function readKeyFile()
 	if isfn(readfile) and isfn(isfile) then
 		local ok, exists = pcall(isfile, KEY_FILE)
@@ -43,25 +42,17 @@ local function readKeyFile()
 	end
 	return nil
 end
-local function saveKeyFile(k)
-	if isfn(writefile) then pcall(writefile, KEY_FILE, k) end
-end
+local function saveKeyFile(k) if isfn(writefile) then pcall(writefile, KEY_FILE, k) end end
+local function clearKeyFile() if isfn(delfile) then pcall(delfile, KEY_FILE) end end
 
--- best-effort hardware id (used by premium keys; harmless if unavailable)
 local function hwid()
-	local candidates = { gethwid, get_hwid, (syn and syn.gethwid) }
-	for _, fn in ipairs(candidates) do
-		if isfn(fn) then
-			local ok, id = pcall(fn)
-			if ok and type(id) == "string" and #id > 0 then return id end
-		end
+	for _, fn in ipairs({ gethwid, get_hwid, (syn and syn.gethwid) }) do
+		if isfn(fn) then local ok, id = pcall(fn); if ok and type(id) == "string" and #id > 0 then return id end end
 	end
 	local ok, id = pcall(function() return game:GetService("RbxAnalyticsService"):GetClientId() end)
-	if ok and type(id) == "string" then return id end
-	return "unknown"
+	return (ok and type(id) == "string") and id or "unknown"
 end
 
--- http GET that works across executors (same strategy the hub uses)
 local function httpGet(url)
 	local ok, res = pcall(function() return game:HttpGet(url, true) end)
 	if ok and type(res) == "string" and #res > 0 then return res end
@@ -72,125 +63,140 @@ local function httpGet(url)
 	end
 	return nil
 end
+local function decode(s) local ok, v = pcall(function() return HttpService:JSONDecode(s) end); return ok and v or nil end
+local function esc(s) return HttpService:UrlEncode(s or "") end
 
 local function notify(title, text, dur)
-	pcall(function()
-		game:GetService("StarterGui"):SetCore("SendNotification", { Title = title, Text = text, Duration = dur or 6 })
-	end)
+	pcall(function() game:GetService("StarterGui"):SetCore("SendNotification", { Title = title, Text = text, Duration = dur or 6 }) end)
 	print(("[%s] %s - %s"):format(BRAND, title, text))
 end
 
--- ask the backend for the script. Returns (body, status). Body is Lua to run (hub, or an error popup).
-local function fetchScript(key)
-	local url = ("%s/script?key=%s&hwid=%s&v=2"):format(
-		BACKEND,
-		HttpService:UrlEncode(key or ""),
-		HttpService:UrlEncode(hwid())
-	)
-	return httpGet(url)
+-- fetch + run the hub for a key. returns true on success.
+local function runWithKey(key)
+	local body, status = httpGet(("%s/script?key=%s&hwid=%s&v=2"):format(BACKEND, esc(key), esc(hwid())))
+	if not body then notify("Connection failed", "Couldn't reach the key server.", 6); return false end
+	if status == 403 or status == 401 then return false, "rejected" end
+	local fn, err = loadstring(body)
+	if not fn then notify("Load error", tostring(err):sub(1, 120), 8); return false end
+	local ok, runErr = pcall(fn)
+	if not ok then notify("Load error", tostring(runErr):sub(1, 120), 8); return false end
+	return true
 end
 
------------------------------------------------------------------------------ minimal key prompt GUI
--- shown only when no key is provided via getgenv().EncoreKey or the saved file
-local function promptForKey(onSubmit)
-	local ok = pcall(function()
-		local CoreGui = game:GetService("CoreGui")
-		local LP = Players.LocalPlayer
-		local parent = (gethui and gethui()) or CoreGui
-		if CoreGui:FindFirstChild("EncoreKeyPrompt") then CoreGui.EncoreKeyPrompt:Destroy() end
+----------------------------------------------------------------------------- GUI
+local function buildGui()
+	local CoreGui = game:GetService("CoreGui")
+	local parent = (gethui and gethui()) or CoreGui
+	if parent:FindFirstChild("EncoreKeyPrompt") then parent.EncoreKeyPrompt:Destroy() end
 
-		local gui = Instance.new("ScreenGui")
-		gui.Name = "EncoreKeyPrompt"; gui.ResetOnSpawn = false; gui.IgnoreGuiInset = true
-		gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-		gui.Parent = parent
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "EncoreKeyPrompt"; gui.ResetOnSpawn = false; gui.IgnoreGuiInset = true
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; gui.Parent = parent
 
-		local frame = Instance.new("Frame")
-		frame.Size = UDim2.fromOffset(340, 190); frame.Position = UDim2.new(0.5, -170, 0.5, -95)
-		frame.BackgroundColor3 = Color3.fromRGB(24, 24, 32); frame.BorderSizePixel = 0; frame.Parent = gui
-		Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.fromOffset(360, 250); frame.Position = UDim2.new(0.5, -180, 0.5, -125)
+	frame.BackgroundColor3 = Color3.fromRGB(23, 23, 31); frame.BorderSizePixel = 0; frame.Parent = gui
+	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
 
-		local function label(txt, y, size, color)
-			local l = Instance.new("TextLabel")
-			l.BackgroundTransparency = 1; l.Position = UDim2.new(0, 20, 0, y); l.Size = UDim2.new(1, -40, 0, size + 6)
-			l.Font = Enum.Font.GothamBold; l.TextSize = size; l.TextXAlignment = Enum.TextXAlignment.Left
-			l.TextColor3 = color or Color3.fromRGB(240, 240, 245); l.Text = txt; l.Parent = frame
-			return l
+	local function label(txt, y, size, color, font)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1; l.Position = UDim2.new(0, 22, 0, y); l.Size = UDim2.new(1, -44, 0, size + 8)
+		l.Font = font or Enum.Font.GothamBold; l.TextSize = size; l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextYAlignment = Enum.TextYAlignment.Top; l.TextWrapped = true
+		l.TextColor3 = color or Color3.fromRGB(240, 240, 245); l.Text = txt; l.Parent = frame
+		return l
+	end
+	label(BRAND, 18, 20)
+	label("Play anything. Play together.", 44, 12, Color3.fromRGB(150, 150, 165), Enum.Font.Gotham)
+
+	local status = label("Get a key to start, or paste one below.", 74, 13, Color3.fromRGB(180, 180, 195), Enum.Font.Gotham)
+	status.Size = UDim2.new(1, -44, 0, 40)
+
+	local function button(txt, y, color, cb)
+		local b = Instance.new("TextButton")
+		b.Position = UDim2.new(0, 22, 0, y); b.Size = UDim2.new(1, -44, 0, 38)
+		b.BackgroundColor3 = color; b.BorderSizePixel = 0; b.AutoButtonColor = true
+		b.Font = Enum.Font.GothamBold; b.TextSize = 14; b.TextColor3 = Color3.fromRGB(255, 255, 255)
+		b.Text = txt; b.Parent = frame
+		Instance.new("UICorner", b).CornerRadius = UDim.new(0, 9)
+		b.MouseButton1Click:Connect(cb); return b
+	end
+
+	local box = Instance.new("TextBox")
+	box.Position = UDim2.new(0, 22, 0, 165); box.Size = UDim2.new(1, -120, 0, 38)
+	box.BackgroundColor3 = Color3.fromRGB(15, 15, 21); box.BorderSizePixel = 0
+	box.Font = Enum.Font.Code; box.TextSize = 14; box.TextColor3 = Color3.fromRGB(255, 255, 255)
+	box.PlaceholderText = "paste a key"; box.Text = ""; box.ClearTextOnFocus = false; box.Parent = frame
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 9)
+
+	local function setStatus(t) status.Text = t end
+	return gui, frame, setStatus, button, box
+end
+
+----------------------------------------------------------------------------- flows
+local started = false
+local function startPanel()
+	if started then return end
+	started = true
+	local gui, frame, setStatus, button, box = buildGui()
+	local polling = false
+
+	local function finishWith(key, save)
+		setStatus("Key accepted - loading Encore...")
+		local ok, why = runWithKey(key)
+		if ok then if save then saveKeyFile(key) end; gui:Destroy()
+		else
+			if why == "rejected" then setStatus("That key is invalid or expired. Get a new one.") ; clearKeyFile()
+			else setStatus("Couldn't load. Try again.") end
 		end
-		label(BRAND .. "  -  enter your key", 16, 18)
-		label("This week's key. Keep it for the week.", 42, 12, Color3.fromRGB(150, 150, 165)).Font = Enum.Font.Gotham
+	end
 
-		local box = Instance.new("TextBox")
-		box.Position = UDim2.new(0, 20, 0, 74); box.Size = UDim2.new(1, -40, 0, 38)
-		box.BackgroundColor3 = Color3.fromRGB(16, 16, 22); box.BorderSizePixel = 0
-		box.Font = Enum.Font.Code; box.TextSize = 15; box.TextColor3 = Color3.fromRGB(255, 255, 255)
-		box.PlaceholderText = "paste key here"; box.Text = ""; box.ClearTextOnFocus = false; box.Parent = frame
-		Instance.new("UICorner", box).CornerRadius = UDim.new(0, 8)
-
-		local function button(txt, x, w, color, cb)
-			local b = Instance.new("TextButton")
-			b.Position = UDim2.new(0, x, 0, 126); b.Size = UDim2.new(0, w, 0, 40)
-			b.BackgroundColor3 = color; b.BorderSizePixel = 0; b.AutoButtonColor = true
-			b.Font = Enum.Font.GothamBold; b.TextSize = 14; b.TextColor3 = Color3.fromRGB(255, 255, 255)
-			b.Text = txt; b.Parent = frame
-			Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-			b.MouseButton1Click:Connect(cb)
-			return b
-		end
-
-		button("Get a key", 20, 150, Color3.fromRGB(60, 60, 78), function()
-			if isfn(setclipboard) then pcall(setclipboard, KEY_LINK) end
-			notify("Key link copied", "Paste it in your browser: " .. KEY_LINK, 10)
-		end)
-		button("Use key", 180, 140, Color3.fromRGB(124, 92, 255), function()
-			local k = (box.Text or ""):gsub("%s+", "")
-			if k == "" then notify("No key", "Paste your key first.", 4); return end
-			gui:Destroy()
-			onSubmit(k)
-		end)
-		box.FocusLost:Connect(function(enter)
-			if enter then
-				local k = (box.Text or ""):gsub("%s+", "")
-				if k ~= "" then gui:Destroy(); onSubmit(k) end
+	-- Get a key (ad flow)
+	button("Get a key", 112, Color3.fromRGB(124, 92, 255), function()
+		if polling then return end
+		setStatus("Starting...")
+		local body = httpGet(BACKEND .. "/start?hwid=" .. esc(hwid()))
+		local data = body and decode(body)
+		if not data or not data.url then setStatus("Couldn't start. Try again in a moment."); return end
+		if isfn(setclipboard) then pcall(setclipboard, data.url) end
+		setStatus("Link copied! Open it in your browser,\nfinish it, then wait here. (your key binds to this PC)")
+		polling = true
+		task.spawn(function()
+			for _ = 1, 100 do -- ~5 min
+				task.wait(3)
+				local cb = httpGet(BACKEND .. "/claim?nonce=" .. esc(data.nonce))
+				local cd = cb and decode(cb)
+				if cd and cd.status == "ready" and cd.key then
+					polling = false; finishWith(cd.key, true); return
+				elseif cd and cd.status == "expired" then
+					polling = false; setStatus("Session expired. Press Get a key again."); return
+				end
 			end
+			polling = false; setStatus("Timed out. Press Get a key to retry.")
 		end)
 	end)
-	if not ok then
-		notify("Key needed", "Set getgenv().EncoreKey = \"...\" then run again. Get a key: " .. KEY_LINK, 12)
+
+	-- Use key (manual / premium)
+	local use = Instance.new("TextButton")
+	use.Position = UDim2.new(1, -92, 0, 165); use.Size = UDim2.new(0, 70, 0, 38)
+	use.BackgroundColor3 = Color3.fromRGB(60, 60, 78); use.BorderSizePixel = 0; use.AutoButtonColor = true
+	use.Font = Enum.Font.GothamBold; use.TextSize = 13; use.TextColor3 = Color3.fromRGB(255, 255, 255)
+	use.Text = "Use key"; use.Parent = frame
+	Instance.new("UICorner", use).CornerRadius = UDim.new(0, 9)
+	local function submitBox()
+		local k = (box.Text or ""):gsub("%s+", "")
+		if k == "" then setStatus("Paste a key first."); return end
+		finishWith(k, true)
 	end
+	use.MouseButton1Click:Connect(submitBox)
+	box.FocusLost:Connect(function(enter) if enter then submitBox() end end)
 end
 
 ----------------------------------------------------------------------------- run
-local function tryKey(key, fromPrompt)
-	if not key or key == "" then return end
-	notify(BRAND, "Checking key...", 3)
-	local body, status = fetchScript(key)
-	if not body then
-		notify("Connection failed", "Could not reach the key server. Try again.", 6)
-		return
-	end
-	-- 200 from the backend always returns runnable Lua: either the hub, or a short popup telling the
-	-- user the key is invalid/expired. We save the key only when the backend confirms it (HTTP 200).
-	if status == nil or status == 200 then
-		if fromPrompt then saveKeyFile(key) end
-		local fn, err = loadstring(body)
-		if fn then
-			local ok, runErr = pcall(fn)
-			if not ok then notify("Load error", tostring(runErr):sub(1, 120), 8) end
-		else
-			notify("Load error", tostring(err):sub(1, 120), 8)
-		end
-	elseif status == 403 or status == 401 then
-		if isfn(delfile) then pcall(delfile, KEY_FILE) end  -- drop a stale saved key
-		notify("Key rejected", "That key is invalid or expired. Grab this week's key.", 8)
-		promptForKey(function(k) tryKey(k, true) end)
-	else
-		notify("Server error", "Key server returned " .. tostring(status) .. ". Try later.", 6)
-	end
-end
-
-local savedOrGiven = (type(genv.EncoreKey) == "string" and genv.EncoreKey) or readKeyFile()
-if savedOrGiven and savedOrGiven ~= "" then
-	tryKey(savedOrGiven, false)
+local saved = (type(genv.EncoreKey) == "string" and genv.EncoreKey) or readKeyFile()
+if saved and saved ~= "" then
+	local ok = runWithKey(saved)
+	if not ok then clearKeyFile(); startPanel() end
 else
-	promptForKey(function(k) tryKey(k, true) end)
+	startPanel()
 end
