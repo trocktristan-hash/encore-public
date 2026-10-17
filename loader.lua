@@ -1,17 +1,18 @@
 --[[
-	Encore loader  (public)
+	Encore loader  (public)   -   safe to be public, contains NO hub code.
 
-	Safe to be public - contains NO hub code, just a key check.
+	Getting in (works on PC AND mobile):
+	  1. Run this script - the Encore panel opens.
+	  2. Tap "Get a key" - a link is copied to your clipboard.
+	  3. Open it in your browser and finish it.
+	  4. Come back to Roblox. On PC it loads on its own; on mobile just run the
+	     script again - Encore remembers and loads your key automatically.
+	  Your key lasts 24h and is bound to your device. No key to copy by hand.
 
-	How a user gets in:
-	  * Click "Get a key"  -> a LootLabs link is copied to the clipboard.
-	    Open it in a browser, finish it, come back - Encore loads itself (the key
-	    is bound to this device). Keys last a while, then you grab a new one.
-	  * Already have a key (e.g. a premium key)? Paste it in the box and hit Use key.
-	  * Power users:  getgenv().EncoreKey = "ENC-...."  before running this.
+	Premium/staff key? Paste it in the box and hit "Use key".
+	Power users:  getgenv().EncoreKey = "ENC-...."  before running.
 
-	Run:
-	  loadstring(game:HttpGet("https://raw.githubusercontent.com/trocktristan-hash/encore-public/main/loader.lua"))()
+	loadstring(game:HttpGet("https://raw.githubusercontent.com/trocktristan-hash/encore-public/main/loader.lua"))()
 ]]
 
 ----------------------------------------------------------------------------- CONFIG
@@ -31,19 +32,17 @@ end
 local ROOT = (hasFolder("PianoHub") and not hasFolder("Encore")) and "PianoHub" or "Encore"
 pcall(function() if makefolder and not hasFolder(ROOT) then makefolder(ROOT) end end)
 local KEY_FILE = ROOT .. "/key.txt"
+local PEND_FILE = ROOT .. "/pending.txt"
 
-local function readKeyFile()
+local function readFile(p)
 	if isfn(readfile) and isfn(isfile) then
-		local ok, exists = pcall(isfile, KEY_FILE)
-		if ok and exists then
-			local ok2, data = pcall(readfile, KEY_FILE)
-			if ok2 and type(data) == "string" then return (data:gsub("%s+$", "")) end
-		end
+		local ok, ex = pcall(isfile, p)
+		if ok and ex then local ok2, d = pcall(readfile, p); if ok2 and type(d) == "string" then return (d:gsub("%s+$", "")) end end
 	end
 	return nil
 end
-local function saveKeyFile(k) if isfn(writefile) then pcall(writefile, KEY_FILE, k) end end
-local function clearKeyFile() if isfn(delfile) then pcall(delfile, KEY_FILE) end end
+local function writeF(p, v) if isfn(writefile) then pcall(writefile, p, v) end end
+local function delF(p) if isfn(delfile) then pcall(delfile, p) end end
 
 local function hwid()
 	for _, fn in ipairs({ gethwid, get_hwid, (syn and syn.gethwid) }) do
@@ -71,7 +70,7 @@ local function notify(title, text, dur)
 	print(("[%s] %s - %s"):format(BRAND, title, text))
 end
 
--- fetch + run the hub for a key. returns true on success.
+-- fetch + run the hub for a key. returns true on success, or false,"rejected"
 local function runWithKey(key)
 	local body, status = httpGet(("%s/script?key=%s&hwid=%s&v=2"):format(BACKEND, esc(key), esc(hwid())))
 	if not body then notify("Connection failed", "Couldn't reach the key server.", 6); return false end
@@ -83,21 +82,28 @@ local function runWithKey(key)
 	return true
 end
 
+-- one /claim poll: returns "ready",key | "waiting" | "expired"
+local function claimOnce(nonce)
+	local body = httpGet(BACKEND .. "/claim?nonce=" .. esc(nonce))
+	local d = body and decode(body)
+	if not d then return "waiting" end
+	if d.status == "ready" and d.key then return "ready", d.key end
+	if d.status == "expired" then return "expired" end
+	return "waiting"
+end
+
 ----------------------------------------------------------------------------- GUI
 local function buildGui()
 	local CoreGui = game:GetService("CoreGui")
 	local parent = (gethui and gethui()) or CoreGui
 	if parent:FindFirstChild("EncoreKeyPrompt") then parent.EncoreKeyPrompt:Destroy() end
-
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "EncoreKeyPrompt"; gui.ResetOnSpawn = false; gui.IgnoreGuiInset = true
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; gui.Parent = parent
-
 	local frame = Instance.new("Frame")
 	frame.Size = UDim2.fromOffset(360, 250); frame.Position = UDim2.new(0.5, -180, 0.5, -125)
 	frame.BackgroundColor3 = Color3.fromRGB(23, 23, 31); frame.BorderSizePixel = 0; frame.Parent = gui
 	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
-
 	local function label(txt, y, size, color, font)
 		local l = Instance.new("TextLabel")
 		l.BackgroundTransparency = 1; l.Position = UDim2.new(0, 22, 0, y); l.Size = UDim2.new(1, -44, 0, size + 8)
@@ -108,10 +114,8 @@ local function buildGui()
 	end
 	label(BRAND, 18, 20)
 	label("Play anything. Play together.", 44, 12, Color3.fromRGB(150, 150, 165), Enum.Font.Gotham)
-
-	local status = label("Get a key to start, or paste one below.", 74, 13, Color3.fromRGB(180, 180, 195), Enum.Font.Gotham)
-	status.Size = UDim2.new(1, -44, 0, 40)
-
+	local status = label("Tap Get a key to start, or paste one below.", 72, 13, Color3.fromRGB(180, 180, 195), Enum.Font.Gotham)
+	status.Size = UDim2.new(1, -44, 0, 44)
 	local function button(txt, y, color, cb)
 		local b = Instance.new("TextButton")
 		b.Position = UDim2.new(0, 22, 0, y); b.Size = UDim2.new(1, -44, 0, 38)
@@ -121,62 +125,60 @@ local function buildGui()
 		Instance.new("UICorner", b).CornerRadius = UDim.new(0, 9)
 		b.MouseButton1Click:Connect(cb); return b
 	end
-
 	local box = Instance.new("TextBox")
 	box.Position = UDim2.new(0, 22, 0, 165); box.Size = UDim2.new(1, -120, 0, 38)
 	box.BackgroundColor3 = Color3.fromRGB(15, 15, 21); box.BorderSizePixel = 0
 	box.Font = Enum.Font.Code; box.TextSize = 14; box.TextColor3 = Color3.fromRGB(255, 255, 255)
 	box.PlaceholderText = "paste a key"; box.Text = ""; box.ClearTextOnFocus = false; box.Parent = frame
 	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 9)
-
-	local function setStatus(t) status.Text = t end
-	return gui, frame, setStatus, button, box
+	return gui, frame, function(t) status.Text = t end, button, box
 end
 
------------------------------------------------------------------------------ flows
-local started = false
-local function startPanel()
-	if started then return end
-	started = true
+----------------------------------------------------------------------------- panel
+local function startPanel(resumeNonce)
 	local gui, frame, setStatus, button, box = buildGui()
-	local polling = false
+	local busy = false
 
 	local function finishWith(key, save)
 		setStatus("Key accepted - loading Encore...")
 		local ok, why = runWithKey(key)
-		if ok then if save then saveKeyFile(key) end; gui:Destroy()
+		if ok then
+			if save then writeF(KEY_FILE, key) end
+			delF(PEND_FILE); gui:Destroy()
+		elseif why == "rejected" then
+			delF(KEY_FILE); setStatus("That key is invalid or expired. Get a new one.")
 		else
-			if why == "rejected" then setStatus("That key is invalid or expired. Get a new one.") ; clearKeyFile()
-			else setStatus("Couldn't load. Try again.") end
+			setStatus("Couldn't load. Try again.")
 		end
 	end
 
-	-- Get a key (ad flow)
+	-- poll /claim for a nonce until the key is minted
+	local function poll(nonce)
+		if busy then return end
+		busy = true
+		task.spawn(function()
+			for _ = 1, 100 do -- ~5 min
+				local st, key = claimOnce(nonce)
+				if st == "ready" then busy = false; finishWith(key, true); return end
+				if st == "expired" then busy = false; delF(PEND_FILE); setStatus("Session expired. Press Get a key again."); return end
+				task.wait(3)
+			end
+			busy = false; setStatus("Still waiting. Finish the link, then press Get a key / reopen.")
+		end)
+	end
+
 	button("Get a key", 112, Color3.fromRGB(124, 92, 255), function()
-		if polling then return end
+		if busy then return end
 		setStatus("Starting...")
 		local body = httpGet(BACKEND .. "/start?hwid=" .. esc(hwid()))
 		local data = body and decode(body)
 		if not data or not data.url then setStatus("Couldn't start. Try again in a moment."); return end
+		writeF(PEND_FILE, data.nonce)
 		if isfn(setclipboard) then pcall(setclipboard, data.url) end
-		setStatus("Link copied! Open it in your browser,\nfinish it, then wait here. (your key binds to this PC)")
-		polling = true
-		task.spawn(function()
-			for _ = 1, 100 do -- ~5 min
-				task.wait(3)
-				local cb = httpGet(BACKEND .. "/claim?nonce=" .. esc(data.nonce))
-				local cd = cb and decode(cb)
-				if cd and cd.status == "ready" and cd.key then
-					polling = false; finishWith(cd.key, true); return
-				elseif cd and cd.status == "expired" then
-					polling = false; setStatus("Session expired. Press Get a key again."); return
-				end
-			end
-			polling = false; setStatus("Timed out. Press Get a key to retry.")
-		end)
+		setStatus("Link copied! Open it in your browser & finish it.\nThen come back - PC loads automatically, on mobile\njust run the script again. (binds to this device)")
+		poll(data.nonce)
 	end)
 
-	-- Use key (manual / premium)
 	local use = Instance.new("TextButton")
 	use.Position = UDim2.new(1, -92, 0, 165); use.Size = UDim2.new(0, 70, 0, 38)
 	use.BackgroundColor3 = Color3.fromRGB(60, 60, 78); use.BorderSizePixel = 0; use.AutoButtonColor = true
@@ -190,13 +192,18 @@ local function startPanel()
 	end
 	use.MouseButton1Click:Connect(submitBox)
 	box.FocusLost:Connect(function(enter) if enter then submitBox() end end)
+
+	-- re-opened after starting a link? resume automatically
+	if resumeNonce and resumeNonce ~= "" then
+		setStatus("Welcome back - checking if your key is ready...")
+		poll(resumeNonce)
+	end
 end
 
 ----------------------------------------------------------------------------- run
-local saved = (type(genv.EncoreKey) == "string" and genv.EncoreKey) or readKeyFile()
+local saved = (type(genv.EncoreKey) == "string" and genv.EncoreKey) or readFile(KEY_FILE)
 if saved and saved ~= "" then
-	local ok = runWithKey(saved)
-	if not ok then clearKeyFile(); startPanel() end
-else
-	startPanel()
+	if runWithKey(saved) then return end
+	delF(KEY_FILE)
 end
+startPanel(readFile(PEND_FILE))
