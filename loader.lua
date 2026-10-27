@@ -18,6 +18,7 @@
 ----------------------------------------------------------------------------- CONFIG
 local BACKEND = "https://encore-keys.affxter.workers.dev"  -- your Worker URL, no trailing slash
 local BRAND   = "Encore"
+local DISCORD = "https://discord.gg/fSgSAd4URv"
 -------------------------------------------------------------------------------------------------
 
 local Players = game:GetService("Players")
@@ -50,6 +51,19 @@ local function hwid()
 	end
 	local ok, id = pcall(function() return game:GetService("RbxAnalyticsService"):GetClientId() end)
 	return (ok and type(id) == "string") and id or "unknown"
+end
+
+-- copy text with whichever clipboard function this executor has. returns true when it worked
+local function copyText(s)
+	local fns = {}
+	if isfn(setclipboard) then fns[#fns + 1] = setclipboard end
+	if isfn(toclipboard) then fns[#fns + 1] = toclipboard end
+	if isfn(set_clipboard) then fns[#fns + 1] = set_clipboard end
+	if syn and isfn(syn.write_clipboard) then fns[#fns + 1] = syn.write_clipboard end
+	for _, fn in ipairs(fns) do
+		if pcall(fn, s) then return true end
+	end
+	return false
 end
 
 local function httpGet(url)
@@ -101,7 +115,7 @@ local function buildGui()
 	gui.Name = "EncoreKeyPrompt"; gui.ResetOnSpawn = false; gui.IgnoreGuiInset = true
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; gui.Parent = parent
 	local frame = Instance.new("Frame")
-	frame.Size = UDim2.fromOffset(360, 250); frame.Position = UDim2.new(0.5, -180, 0.5, -125)
+	frame.Size = UDim2.fromOffset(360, 282); frame.Position = UDim2.new(0.5, -180, 0.5, -141)
 	frame.BackgroundColor3 = Color3.fromRGB(23, 23, 31); frame.BorderSizePixel = 0; frame.Parent = gui
 	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
 	local function label(txt, y, size, color, font)
@@ -192,6 +206,20 @@ local function startPanel(resumeNonce)
 	end
 	use.MouseButton1Click:Connect(submitBox)
 	box.FocusLost:Connect(function(enter) if enter then submitBox() end end)
+
+	-- Discord: one tap copies the invite (to add songs, get help, see updates)
+	local discordBtn
+	discordBtn = button("Join Discord to add songs!", 218, Color3.fromRGB(88, 101, 242), function()
+		if copyText(DISCORD) then
+			setStatus("Discord invite copied! Paste it in your browser\nto join - that's where you add songs.")
+			discordBtn.Text = "Invite copied!"
+			task.delay(2.5, function()
+				if discordBtn and discordBtn.Parent then discordBtn.Text = "Join Discord to add songs!" end
+			end)
+		else
+			setStatus("Couldn't copy automatically. Join here:\n" .. DISCORD)
+		end
+	end)
 
 	-- re-opened after starting a link? resume automatically
 	if resumeNonce and resumeNonce ~= "" then
