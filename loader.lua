@@ -89,6 +89,13 @@ local function runWithKey(key)
 	local body, status = httpGet(("%s/script?key=%s&hwid=%s&v=2"):format(BACKEND, esc(key), esc(hwid())))
 	if not body then notify("Connection failed", "Couldn't reach the key server.", 6); return false end
 	if status == 403 or status == 401 then return false, "rejected" end
+	-- some executors hand back a 403 body with no status: a rejected key gets a tiny notice script, never the hub
+	if #body < 2000 then
+		local small = loadstring(body)
+		if small then pcall(small) end
+		if body:find("Get a key", 1, true) then return false, "rejected" end
+		return false
+	end
 	local fn, err = loadstring(body)
 	if not fn then notify("Load error", tostring(err):sub(1, 120), 8); return false end
 	local ok, runErr = pcall(fn)
