@@ -35,6 +35,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/trocktristan-hash/enc
 - **Smart drums** - real grooves and fills instead of one repeating beat.
 - **A-B loop / practice** - loop a section and slow it down.
 - **Add songs easily** - from your PC, a link or a sheet, or submit in Discord for everyone.
+- **Works on mobile** - on phones Encore fits your screen, with bigger buttons and a floating bar so you can hide it and keep playing.
 - **Always up to date** - the library and the hub update automatically.
 
 ## Songs
